@@ -14,5 +14,5 @@ Example usage and samples from a trained model will be added eventually; I'm in 
 ## Important note on masks
 
 I use slightly different convolution masks than van den Oord and Turukin. Please take a look at 
-[this notebook](./note-note-on-conv-masking.ipynb) to see my explanation of the masks and how they
+[this notebook](./note-on-conv-masking.ipynb) to see my explanation of the masks and how they
 prevent blindspots.
