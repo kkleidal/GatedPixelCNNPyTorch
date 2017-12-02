@@ -29,10 +29,10 @@ class Evaluator:
             print("Evaluating...")
             prog = tqdm.tqdm(total=len(self.ds))
         for i, (labels, x, _) in enumerate(self.loader, 0):
-            N, labels, x, x_quant = preprocess(self.args, labels, x)
-            logits = self.model(x, labels=labels)
-            nll = negative_log_likelihood(logits, x_quant)
-            nll_total = nll_total + nll.data * N
+            N, labels, x, x_quant = preprocess(self.args, self.model, labels, x)
+            dist = self.model(x, labels=labels)
+            nll = -dist.log_prob(x_quant)
+            nll_total = nll_total + nll.data
             Ntotal = Ntotal + N
             if show_prog:
                 prog.update(N)
@@ -41,10 +41,12 @@ class Evaluator:
         nll = nll_total / Ntotal
         return nll
 
-def preprocess(args, labels, x):
-    x_quant = torch.from_numpy(quantisize(x.numpy(),
-        args.levels)).type(torch.LongTensor)
-    x = x_quant.float() / (args.levels - 1)
+def preprocess(args, model, labels, x):
+    x_quant = model.quant(x, args.levels)
+    x = model.dequant(x_quant, args.levels)
+    #x_quant = torch.from_numpy(quantisize(x.numpy(),
+    #    args.levels)).type(torch.LongTensor)
+    #x = x_quant.float() / (args.levels - 1)
     if args.gpu:
         x = x.cuda()
         x_quant = x_quant.cuda()
@@ -55,15 +57,6 @@ def preprocess(args, labels, x):
     labels = Variable(labels, requires_grad=False)
     return N, labels, x, x_quant
 
-def negative_log_likelihood(logits, x_quant, dim=1):
-    log_probs = F.log_softmax(logits, dim=dim)
-    flatten = lambda x, shape: x.transpose(1, -1).contiguous().view(*shape)
-    size_factor = float(np.prod([x for i, x in enumerate(logits.size()) if i not in {0, dim}]).astype(np.float32))
-    nll = torch.nn.functional.nll_loss(
-            flatten(log_probs, (-1, args.levels)),
-            flatten(x_quant, (-1,))) * size_factor
-    return nll
-
 if __name__ == "__main__":
     parser = ArgParser(description='Train pixelcnn on MNIST')
     parser.add_argument('--conditional', action='store_true',
@@ -72,11 +65,14 @@ if __name__ == "__main__":
             help='levels for quantisization')
     parser.add_argument('--layers', type=int, default=5,
             help='layers')
+    parser.add_argument('--hidden-dims', type=int, default=32,
+            help='hidden dimensions')
     args = parser.parse_args()
 
     model = MNIST_PixelCNNNew(levels=args.levels,
             layers=args.layers,
-            conditional=args.conditional) # MNIST_PixelCNN(levels=args.levels, conditional=args.conditional)
+            conditional=args.conditional,
+            hidden_dims=args.hidden_dims)
     if args.gpu:
         model = model.cuda()
 
@@ -100,9 +96,9 @@ if __name__ == "__main__":
         if trainer.writer is not None:
             trainer.writer.add_scalar('loss/eval-nll', evaluation_nll, trainer.step)
         for i, (labels, x, _) in enumerate(loader, 0):
-            N, labels, x, x_quant = preprocess(args, labels, x)
-            logits = model(x, labels=labels)
-            nll = negative_log_likelihood(logits, x_quant)
+            N, labels, x, x_quant = preprocess(args, model, labels, x)
+            dist = model(x, labels=labels)
+            nll = -dist.log_prob(x_quant) / N
             loss = nll
             trainer.loss_update(loss.data.cpu().numpy())
             if i % args.print_every == 0:
@@ -118,11 +114,12 @@ if __name__ == "__main__":
                 new_labels = new_labels.cuda()
             new_labels = Variable(new_labels, requires_grad=False)
             x_samp = model.generate_samples(28, 28, 1, 3, labels=new_labels)
+            print("samp stats: ", x_samp.max(), x_samp.min(), x_samp.mean())
             if x_samp is not None:
                 for ex in range(3):
                     trainer.writer.add_image('x-samples/samp%d' % ex, torch_bw_img_to_np_img(x_samp[ex]), trainer.step)
 
-            mlp = logits.max(dim=1, keepdim=False)[1].float() / (args.levels - 1)
+            mlp = model.dequant(dist.MAP, args.levels)
             for ex in range(3):
                 trainer.writer.add_image('x-train/mlp-%d' % ex, torch_bw_img_to_np_img(mlp[ex]), trainer.step)
                 trainer.writer.add_image('x-train/input-%d' % ex, torch_bw_img_to_np_img(x[ex]), trainer.step)

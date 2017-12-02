@@ -2,19 +2,24 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from .components.pixelcnn import *
+from .components.distributions import *
 
 class MNIST_PixelCNNNew(PixelCNN):
-    def __init__(self, layers=5, levels=8, conditional=False, **kwargs):
+    def __init__(self, layers=5, levels=8, hidden_dims=32, conditional=False, **kwargs):
         super().__init__()
+        self.levels = levels
         self.conditional = conditional
         if conditional:
             self.embed = nn.Embedding(10, 32)
-        layer_objs = [PixelCNNGatedLayer.primary(1, 16, 7, conditional_features=10 if conditional else None, **kwargs)]
+        layer_objs = [PixelCNNGatedLayer.primary(1, hidden_dims, 7, conditional_features=10 if conditional else None, **kwargs)]
         layer_objs = layer_objs + [
-                PixelCNNGatedLayer.secondary(16, 16, 7, conditional_features=10 if conditional else None, **kwargs)
+                PixelCNNGatedLayer.secondary(hidden_dims, hidden_dims, 7, conditional_features=10 if conditional else None, **kwargs)
                 for _ in range(1, layers)]
         self.stack = PixelCNNGatedStack(*layer_objs)
-        self.out = nn.Conv2d(16, levels, 1)
+        self.out = nn.Conv2d(hidden_dims, levels, 1)
+
+    def sample_pixel(self, canvas, row, col, channel, quanta=None, **kwargs):
+        return super().sample_pixel(canvas, row, col, channel, quanta=self.levels, **kwargs)
 
     def _adapt_kwargs(self, kwargs):
         if "labels" in kwargs:
@@ -37,4 +42,4 @@ class MNIST_PixelCNNNew(PixelCNN):
         _, h, _ = self.stack(inp, inp, **self._adapt_kwargs(kwargs))
         h = self.out(h)
         h = h.unsqueeze(2)
-        return h
+        return Multinoulli(h)

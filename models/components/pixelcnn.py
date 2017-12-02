@@ -260,19 +260,23 @@ class PixelCNNGatedStack(nn.Module):
         return v, h, skips
 
 class PixelCNN(nn.Module):
-    def _sample_from(self, probas):
-        N, level_count = probas.size()
-        val = torch.rand(N, 1)
-        if probas.is_cuda:
-            val = val.cuda()
-        cutoffs = torch.cumsum(probas, dim=1)
-        _, idx = torch.max(cutoffs > val, dim=1)
-        out = idx.float() / (level_count - 1)
-        return out 
+    @classmethod
+    def dequant(cls, x, quanta):
+        return x.float() / (quanta - 1)
 
-    def sample_pixel(self, canvas, row, col, channel, **kwargs):
-        probs = F.softmax(self(canvas, **kwargs)[:, :, channel, row, col], dim=1)
-        return self._sample_from(probs.data)
+    @classmethod
+    def quant(cls, x, quanta):
+        return torch.round(x * (quanta - 1)).type(torch.LongTensor)
+
+    def sample_pixel(self, canvas, row, col, channel, quanta=None, **kwargs):
+        sampled = self(canvas, **kwargs).sample()[:, channel, row, col]
+        if quanta is not None:
+            return self.dequant(sampled, quanta)
+        else:
+            return sampled
+
+    def dist(self, default_size=None):
+        return PixelCNNDist(self, default_size=default_size)
 
     def generate_samples(self, height, width,
             channels, count, show_prog=False, **kwargs):
@@ -285,8 +289,7 @@ class PixelCNN(nn.Module):
             for i in range(height):
                 for j in range(width):
                     for k in range(channels):
-                        samples.data[:, k, i, j] = self.sample_pixel(samples,
-                                i, j, k, **kwargs)
+                        samples.data[:, k, i, j] = self.sample_pixel(samples, i, j, k, **kwargs)
                         if prog is not None:
                             prog.update()
         if show_prog:
@@ -295,6 +298,31 @@ class PixelCNN(nn.Module):
         else:
             generate()
         return samples
+
+class PixelCNNDist:
+    def __init__(self, pixelcnn, default_size=None):
+        self.pixelcnn
+        self.default_size = default_size
+
+    def _get_size(self, size):
+        if size is None:
+            if self.default_size is None:
+                raise RuntimeError("Unknown size for sample.")
+            size = self.default_size
+        C, H, W = size
+        return (C, H, W)
+
+    def sample(self, size=None, **kwargs):
+        C, H, W = self._get_size(size)
+        return self.pixelcnn.generate_samples(H, W, C, 1, **kwargs).squeeze(0)
+
+    def sample_n(self, n, size=None, **kwargs):
+        C, H, W = self._get_size(size)
+        return self.pixelcnn.generate_samples(H, W, C, n, **kwargs)
+
+    def log_prob(self, value, **kwargs):
+        distribution = self.pixelcnn(value, **kwargs)
+        return distribution.log_prob(value)
 
 if __name__ == "__main__":
     x = PixelCNN(3, 128, 5, 16, 8, conditional_features=10,
