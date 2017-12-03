@@ -275,8 +275,8 @@ class PixelCNN(nn.Module):
         else:
             return sampled
 
-    def dist(self, default_size=None):
-        return PixelCNNDist(self, default_size=default_size)
+    def dist(self, default_size=None, **kwargs):
+        return PixelCNNDist(self, kwargs, default_size=default_size)
 
     def generate_samples(self, height, width,
             channels, count, show_prog=False, **kwargs):
@@ -289,7 +289,9 @@ class PixelCNN(nn.Module):
             for i in range(height):
                 for j in range(width):
                     for k in range(channels):
-                        samples.data[:, k, i, j] = self.sample_pixel(samples, i, j, k, **kwargs)
+                        samp = self.sample_pixel(samples, i, j, k, **kwargs)
+                        assert tuple(samp.size()) == (samples.size(0),), "%s != %s" % (samp.size(), samples.size(0))
+                        samples.data[:, k, i, j] = samp.data
                         if prog is not None:
                             prog.update()
         if show_prog:
@@ -300,9 +302,16 @@ class PixelCNN(nn.Module):
         return samples
 
 class PixelCNNDist:
-    def __init__(self, pixelcnn, default_size=None):
-        self.pixelcnn
+    def __init__(self, pixelcnn, default_kwargs, default_size=None):
+        self.pixelcnn = pixelcnn
+        self.default_kwargs = default_kwargs
         self.default_size = default_size
+
+    def __str__(self):
+        return "PixelCNNDist<%r>" % self.pixelcnn
+
+    def __repr__(self):
+        return str(self)
 
     def _get_size(self, size):
         if size is None:
@@ -312,16 +321,22 @@ class PixelCNNDist:
         C, H, W = size
         return (C, H, W)
 
+    def _get_kwargs(self, kwargs):
+        kwargs2 = {}
+        kwargs2.update(self.default_kwargs)
+        kwargs2.update(kwargs)
+        return kwargs2
+
     def sample(self, size=None, **kwargs):
         C, H, W = self._get_size(size)
-        return self.pixelcnn.generate_samples(H, W, C, 1, **kwargs).squeeze(0)
+        return self.pixelcnn.generate_samples(H, W, C, 1, **self._get_kwargs(kwargs)).squeeze(0)
 
     def sample_n(self, n, size=None, **kwargs):
         C, H, W = self._get_size(size)
-        return self.pixelcnn.generate_samples(H, W, C, n, **kwargs)
+        return self.pixelcnn.generate_samples(H, W, C, n, **self._get_kwargs(kwargs))
 
     def log_prob(self, value, **kwargs):
-        distribution = self.pixelcnn(value, **kwargs)
+        distribution = self.pixelcnn(value, **self._get_kwargs(kwargs))
         return distribution.log_prob(value)
 
 if __name__ == "__main__":

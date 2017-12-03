@@ -27,7 +27,7 @@ class Multinoulli:
         idx = idx.view(*(size_goal + [1]))
         idx = idx.permute(*self.permutation_r).contiguous()
         idx = idx.squeeze(self.dim)
-        return idx
+        return Variable(idx, requires_grad=False)
 
     @property
     def MAP(self):
